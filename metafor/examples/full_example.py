@@ -4,6 +4,8 @@ from metafor.koopman_AE_model.train import training
 from metafor.analysis.koopman_experiments.exp_mixing_time_simulation import mixing_time_simulation
 from metafor.analysis.koopman_experiments.exp_mixing_time_learned import mixing_time_learned
 from metafor.analysis.koopman_experiments.exp_mixing_time_learned_all import mixing_time_learned_all
+from metafor.simulator.dag import DAG,NodeConfig
+from metafor.simulator.job import ExponentialDistribution
 
 # import logging
 # logging.disable(logging.CRITICAL)
@@ -13,14 +15,43 @@ Part 1 : Data generation
 
 """
 # DAG representing server connections
-# DAG representing server connections
-dag = {
-    1: [2],        # Auth → Gateway
-    2: [3,4],    # Gateway fan-out
-    3: [5],        # Rec → DB
-    4: [5],        # Order → DB
-    5: []          # DB leaf
-}
+dag = DAG([
+    NodeConfig(
+        node_id=1, threads=10, timeout=6.0, max_retries=3,queue_size=100,
+        service_dist=ExponentialDistribution(1 / 0.10),
+        network_dist=ExponentialDistribution(1 / 0.01),
+        token_bucket=None,
+        downstream=[2],
+    ),
+    NodeConfig(
+        node_id=2, threads=5, timeout=2.7, max_retries=3,queue_size=100,
+        service_dist=ExponentialDistribution(1 / 0.10),
+        network_dist=ExponentialDistribution(1 / 0.01),
+        token_bucket=None,
+        downstream=[3, 4],
+    ),
+    NodeConfig(
+        node_id=3, threads=5, timeout=2.5, max_retries=2,queue_size=100,
+        service_dist=ExponentialDistribution(1 / 0.25),
+        network_dist=ExponentialDistribution(1 / 0.01),
+        token_bucket=None,
+        downstream=[5],
+    ),
+    NodeConfig(
+        node_id=4, threads=4, timeout=2.0, max_retries=2,queue_size=100,
+        service_dist=ExponentialDistribution(1 / 0.20),
+        network_dist=ExponentialDistribution(1 / 0.01),
+        token_bucket=None,
+        downstream=[5],
+    ),
+    NodeConfig(
+        node_id=5, threads=4, timeout=1.0, max_retries=0,queue_size=100,
+        service_dist=ExponentialDistribution(1 / 0.15),
+        network_dist=ExponentialDistribution(1 / 0.01),
+        token_bucket=None,
+        downstream=[],
+    ),
+])
 
 
 # import metafor.simulator.server as srv_mod
