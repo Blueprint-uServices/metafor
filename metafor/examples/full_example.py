@@ -4,7 +4,7 @@ from metafor.koopman_AE_model.train import training
 from metafor.analysis.koopman_experiments.exp_mixing_time_simulation import mixing_time_simulation
 from metafor.analysis.koopman_experiments.exp_mixing_time_learned import mixing_time_learned
 from metafor.analysis.koopman_experiments.exp_mixing_time_learned_all import mixing_time_learned_all
-from metafor.simulator.dag import DAG,NodeConfig
+from metafor.simulator.dag import DAG, NodeConfig
 from metafor.simulator.job import ExponentialDistribution
 
 # import logging
