@@ -12,20 +12,17 @@ import random
 from metafor.simulator.server import Context, Server, TokenBucket
 from metafor.simulator.server_with_throttling import ServerWithThrottling
 from metafor.simulator.server_with_LIFO import ServerWithLIFO
-from metafor.simulator.statistics import StatData
+from metafor.simulator.dag import DAG
 from metafor.simulator.client import Client, OpenLoopClient, OpenLoopClientWithTimeout
 from metafor.simulator.preprocessing import mean_variance_std_dev, compute_mean_variance_std_deviation
 from metafor.utils.plot import plot_results
 from metafor.simulator.job import exp_job, bimod_job, wei_job, ExponentialDistribution, WeibullDistribution, NormalDisttribution, LogNormalDistribution
 
+
 import logging
 logger = logging.getLogger(__name__)
 
 import pickle
-
-
-
-
 class Simulator:
     def __init__(
         self, 
@@ -187,149 +184,65 @@ def run_sims(max_t: float, fn: str, num_runs: int, step_time: int, sim_fn, mean_
 # Simulation with unimodal exponential service time and timeout
 def make_sim_exp(mean_t: float, name: str, apiname: str, rho: float, queue_size: int, timeout_t: float,
                  max_retries: int, rho_fault: float, rho_reset: float, fault_start: float,
-                 fault_duration: float, throttle:bool, ts:float, ap:float, queue_type:str,
-                 dist: str, dag :dict, sim_id: int) -> List[Client]:
-    
-    clients = []
-    job_name = apiname
+                 fault_duration: float, throttle: bool, ts: float, ap: float, queue_type: str,
+                 dist: str, dag: DAG, sim_id: int) -> tuple[dict, list]:
 
-    if dist=="exp":
-        job_type = exp_job(mean_t)
+    if dist == "exp":
+        job_type     = exp_job(mean_t)
         distribution = ExponentialDistribution
-    elif dist=="wei":
-        job_type = wei_job(mean_t)
+    elif dist == "wei":
+        job_type     = wei_job(mean_t)
         distribution = WeibullDistribution
     else:
         raise ValueError(f"Unsupported distribution: {dist}")
 
-    # 1. Create servers 
-    servers: dict[str, Server] = {}
-    prev_server = []
-    
+    servers: dict[int, Server] = {}
 
- 
- 
-    # retry_policy = {
-    #     1: (20, 3),
-    #     2: (15, 3),
-    #     3: (10, 2),    
-    #     4: (10, 2),
-    #     5: (20, 0),     
-    # }
-    # servers = {
-    #         1: ServerConfig(server_id=1, threads=10,  mean_service=0.10,
-    #                         timeout=3.0, max_retries=3, net_delay=0.01),
-    #         2: ServerConfig(server_id=2, threads=5,  mean_service=0.10,
-    #                         timeout=1.5, max_retries=3, net_delay=0.01),
-    #         3: ServerConfig(server_id=3, threads=5,  mean_service=0.25,
-    #                         timeout=1.2, max_retries=2, net_delay=0.01),
-    #         4: ServerConfig(server_id=4, threads=4,  mean_service=0.20,
-    #                         timeout=1.0, max_retries=2, net_delay=0.01),
-    #         5: ServerConfig(server_id=5, threads=4,  mean_service=0.15,
-    #                         timeout=0.5, max_retries=0, net_delay=0.01),
-    #     }
+    for node in dag:
+        if queue_type == "lifo":
+            server = ServerWithLIFO(
+                node.node_id, node.name, node.queue_size, node.threads,
+                node.service_dist, None, downstream_server=[],
+                timeout=node.timeout, max_retries=node.max_retries,
+                token_bucket=node.token_bucket, network_dist=node.network_dist,
+            )
+        elif throttle:
+            server = ServerWithThrottling(
+                node.node_id, node.name, node.queue_size, node.threads,
+                node.service_dist, None, throttle, ts, ap,
+                downstream_server=[], timeout=node.timeout,
+                max_retries=node.max_retries, token_bucket=node.token_bucket,
+                network_dist=node.network_dist,
+            )
+        else:
+            server = Server(
+                node.node_id, node.name, node.queue_size, node.threads,
+                node.service_dist, None, downstream_server=[],
+                timeout=node.timeout, max_retries=node.max_retries,
+                token_bucket=node.token_bucket, network_dist=node.network_dist,
+            )
 
-    retry_policy = {
-        1: (6.0, 3),
-        2: (2.7, 3),
-        3: (2.5, 2),    
-        4: (2.0, 2),
-        5: (1.0, 0),     
-    }
+        server.set_context(Context(sim_id, node.node_id))
+        servers[node.node_id] = server
 
-    # service distributions — pass rate = 1/mean_service_time
-    service_dists = {
-        1: ExponentialDistribution(1/0.10),    
-        2: ExponentialDistribution(1/0.10),
-        3: ExponentialDistribution(1/0.25),
-        4: ExponentialDistribution(1/0.20),
-        5: ExponentialDistribution(1/0.15),
-    }
+    # Wire up downstream connections
+    for node in dag:
+        servers[node.node_id].downstream_server = [servers[d] for d in node.downstream]
 
-    # one shared latency distribution or per-service ones
-    network_dists = {
-        1: ExponentialDistribution(1 / 0.01),   # mean 1ms Auth → Gateway
-        2: ExponentialDistribution(1 / 0.01),   # mean 2ms Gateway → Rec/Order
-        3: ExponentialDistribution(1 / 0.01),
-        4: ExponentialDistribution(1 / 0.01),   # mean 2ms Gateway → Rec/Order
-        5: ExponentialDistribution(1 / 0.01),
-    }
+    # Attach clients to entry nodes
+    clients        = []
 
-    thread_pool = {
-        1: 10,   # Auth
-        2: 5,   # Gateway
-        3: 5,
-        4: 4,   # Gateway
-        5: 4,
-    }
-
-    bucket_config = {
-        1: TokenBucket(capacity=50, refill_rate=12.0),
-        2: TokenBucket(capacity=20, refill_rate=9.0),
-        3: TokenBucket(capacity=15, refill_rate=10.0),
-        4: TokenBucket(capacity=15, refill_rate=9.5),
-        5: TokenBucket(capacity=30, refill_rate=20.0),
-    }
-    
-    for i in dag.keys():
-        timeout, retries = retry_policy[i]
-        bucket = bucket_config.get(i)   # None means no rate limiting
-
-        server_name = f"server_{i}"
-
-        if throttle==False:
-            server = Server(i, server_name, queue_size, thread_pool[i], service_dists[i], None, downstream_server=prev_server, timeout=timeout, max_retries=retries,token_bucket=bucket,network_dist=network_dists[i])
-        else:    
-            server = ServerWithThrottling(i, server_name, queue_size, thread_pool[i], service_dists[i], None, throttle, ts,ap, downstream_server=prev_server, timeout=timeout, max_retries=retries, token_bucket=bucket,network_dist=network_dists[i])
-        
-        if queue_type=="lifo":
-            server = ServerWithLIFO(i, server_name, queue_size, thread_pool[i], service_dists[i], None,  downstream_server=prev_server, timeout=timeout, max_retries=retries, token_bucket=bucket,network_dist=network_dists[i])
-        
-        
-        server.set_context(Context(sim_id,i))  #check
-        
-        servers[i] = server
-
-        
-    # 2. Connect servers
-    for src, dsts in dag.items():
-        servers[src].downstream_server = [servers[d] for d in dsts]
-
-    # 3. Identify entry servers (roots) 
-    all_nodes = set(dag.keys())
-    downstream_nodes = {d for dsts in dag.values() for d in dsts}
-    entry_nodes = list(all_nodes - downstream_nodes)
-
-    # 4. Attach clients only to entry nodes
-    clients = []
-    
-    client_timeout = 36
-    client_retry = 3
-    
-    for entry in entry_nodes:
+    for node in dag.entry_nodes():
         client = OpenLoopClientWithTimeout(
-            name, 
-            apiname, 
-            distribution, 
-            rho, 
-            job_type, 
-            client_timeout, 
-            client_retry, 
-            rho_fault, 
-            rho_reset, 
-            fault_start,
-            fault_duration
+            name, apiname, distribution, rho, job_type,
+            timeout_t, max_retries,
+            rho_fault, rho_reset, fault_start, fault_duration,
         )
-
-        client.server = servers[entry]
-        servers[entry].client = client
-
+        client.server             = servers[node.node_id]
+        servers[node.node_id].client = client
         clients.append(client)
-        
-    
-    #print("  ",servers[0].downstream_server.id)
-    return servers, clients
 
+    return servers, clients
 
 
 def run_discrete_experiment(
