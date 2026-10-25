@@ -91,6 +91,14 @@ def data_generation(
     )
 
 
+    # The discretised state space (qsize x osize) must match the queue
+    # capacity actually simulated. Previously convert_csv_to_pkl fell back to
+    # its qsize=100 default for every DAG.
+    try:
+        qsize = int(max(n.queue_size for n in dag))   # DAG of NodeConfig
+    except TypeError:
+        qsize = int(queue_size)                       # legacy dict DAG
+
     convert_csv_to_pkl(
         sim_time, 
         runs, 
@@ -100,7 +108,8 @@ def data_generation(
         rho_fault, 
         fault_start, 
         fault_duration, 
-        dag
+        dag,
+        qsize=qsize,
     )
 
 

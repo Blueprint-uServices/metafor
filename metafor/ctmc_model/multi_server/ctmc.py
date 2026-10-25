@@ -437,8 +437,14 @@ class MultiServerCTMC():
         parent_list = self.parent_list
         max_retries = self.max_retries
         num_threads = self.thread_pools
-        tail_prob_list = self._tail_prob_computer(self._index_composer(q, o, main_queue_sizes, retry_queue_sizes),
-                                                  mu0_ps, timeouts, main_queue_sizes, retry_queue_sizes)
+        tail_prob_list = self._tail_prob_computer(
+        self._index_composer(q, o, main_queue_sizes, retry_queue_sizes),
+        mu0_ps,
+        timeouts,
+        num_threads,
+        main_queue_sizes,
+        retry_queue_sizes
+    )
         mu_drop_base = 1 / (timeouts[node_id] * (max_retries[node_id] + 1))
         mu_retry_base = max_retries[node_id] / (timeouts[node_id] * (max_retries[node_id] + 1))
         lambda_summed = self.effective_lambda(node_id, timeouts, mu0_ps, 1, lambda_list, q, o)

@@ -84,7 +84,12 @@ class OpenLoopClientWithTimeout(OpenLoopClient):
         
         self.fault_start : float = fault_start
         self.fault_duration : float = fault_duration
+        # Goodput bookkeeping: a request only counts as complete if the response
+        # arrives before the client gives up, i.e. within
+        # (max_retries + 1) * timeout of its creation. Later completions are
+        # tracked separately in num_late_jobs.
         self.num_complete_jobs = 0
+        self.num_late_jobs = 0
 
         self.completed_request_ids: deque[str] = deque(maxlen=1000)
 
@@ -236,7 +241,14 @@ class OpenLoopClientWithTimeout(OpenLoopClient):
 
         latency = t - job.created_t
         self.completed_request_ids.append(job.request_id)
-        self.num_complete_jobs += 1
+
+        # created_t is the creation time of the original request (retry clones
+        # keep it), so this is end-to-end latency from the first attempt.
+        deadline = self.timeout * (self.max_retries + 1)
+        if latency <= deadline:
+            self.num_complete_jobs += 1
+        else:
+            self.num_late_jobs += 1
 
         logger.info(
             f"Client completed request {job.request_id} "
