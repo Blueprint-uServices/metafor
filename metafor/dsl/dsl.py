@@ -230,6 +230,7 @@ class Program:
         for server in all_servers:
             callees = callees.union(self.get_callees(server))
         root = all_servers.difference(callees)
+        print(list(root))
         assert len(root) == 1
         return list(root)[0]
 
